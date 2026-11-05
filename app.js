@@ -45,7 +45,7 @@
     data: null,
     blank: function () {
       return {
-        version: 1, sessions: [], football: {}, checklist: {}, body: [], checkpoints: {}, videos: {},
+        version: 2, sessions: [], activities: {}, fullPlan: {}, checklist: {}, body: [], checkpoints: {}, videos: {},
         settings: { muted: false, voice: true, listen: !!(PLAN.voiceCommands && PLAN.voiceCommands.enabled) },
         lastExport: null,
       };
@@ -56,6 +56,9 @@
       var b = this.blank();
       this.data = Object.assign(b, d || {});
       this.data.settings = Object.assign(this.blank().settings, (d && d.settings) || {});
+      var moved = migrateFootball(this.data, this.data.football);
+      delete this.data.football;
+      if (moved) this.save();
     },
     save: function () {
       try { localStorage.setItem(STORE_KEY, JSON.stringify(this.data)); }
@@ -82,27 +85,58 @@
     return PLAN.checklist.filter(function (i) { return isTicked(key, i); }).length;
   }
 
+  // ---- Other sports (activities) ----------------------------------------
+  // Old backups / v1 data kept football as { "date": { minutes } }.
+  function migrateFootball(D, football) {
+    var moved = false;
+    var def = Session.activityDef("football") || { id: "football", name: "Football", icon: "⚽", effect: "hard" };
+    Object.keys(football || {}).forEach(function (k) {
+      var list = D.activities[k] || (D.activities[k] = []);
+      if (list.some(function (a) { return a.activity === "football"; })) return;
+      list.push({ id: "fb-" + k, activity: "football", name: def.name, icon: def.icon, effect: def.effect, minutes: football[k].minutes || 0, at: football[k].at || null });
+      moved = true;
+    });
+    return moved;
+  }
+  function activitiesOn(key) { return Store.data.activities[key] || []; }
+  function actLabel(a) { return (a.icon ? a.icon + " " : "") + a.name + (a.minutes ? " · " + a.minutes + " min" : ""); }
+
+  // The day's plan after activities: [{ id, rounds }] plus why it's reduced.
+  function planFor(key) {
+    return Session.dayPlan(key, { activities: activitiesOn(key), fullPlan: !!Store.data.fullPlan[key] });
+  }
+
+  // A planned routine counts as done once any session that day finished it
+  // with at least the planned rounds (older logs have no rounds = full).
+  function routineDone(key, p, blockId) {
+    var need = p.rounds || Session.fullRounds(p.id, blockId);
+    return sessionsOn(key).some(function (s) {
+      return (s.routines || []).some(function (r) {
+        return r.id === p.id && r.done && (!need || r.rounds == null || r.rounds >= need);
+      });
+    });
+  }
+
   // status: done | partial | missed | rest | today | upcoming
   function dayStatus(key) {
     var info = Session.dayInfo(key);
     var t = today();
     var ss = sessionsOn(key);
-    var complete = ss.some(function (s) { return s.status === "complete"; });
-    var partial = ss.some(function (s) { return s.status === "partial"; });
-    var fb = !!Store.data.football[key];
+    var acts = activitiesOn(key);
+    var plan = planFor(key);
+    var done = plan.routines.filter(function (p) { return routineDone(key, p, plan.blockId); }).map(function (p) { return p.id; });
+    // An expected sport (football on Monday) has to be logged too, unless "full plan" was chosen.
+    var waitingForActivity = plan.activity && plan.activity.expected;
     var st;
-    if (info.schedule.football) {
-      if (fb && complete) st = "done";
-      else if (fb || complete || partial) st = "partial";
-    } else if (complete) st = "done";
-    else if (partial) st = "partial";
+    if (plan.routines.length && done.length === plan.routines.length && !waitingForActivity) st = "done";
+    else if (done.length || ss.length || acts.length) st = "partial";
     if (!st) {
       if (info.schedule.rest) st = key <= t ? "rest" : "upcoming";
       else if (key < t) st = "missed";
       else if (key === t) st = "today";
       else st = "upcoming";
     }
-    return { status: st, info: info, sessions: ss, football: Store.data.football[key] || null };
+    return { status: st, info: info, sessions: ss, activities: acts, plan: plan, doneRoutines: done };
   }
 
   // Consecutive days kept (done; rest days don't break it). Today only counts once done.
@@ -136,7 +170,7 @@
         s.water += x.waterBreaks || 0;
         if (x.rating) s.ratings.push(x.rating);
       });
-      if (ds.football) s.minutes += ds.football.minutes || 0;
+      ds.activities.forEach(function (a) { s.minutes += a.minutes || 0; });
       if (d <= t) { s.possible += PLAN.checklist.length; s.ticks += checklistCount(d); }
     });
     s.minutes = Math.round(s.minutes);
@@ -485,12 +519,160 @@
   // =====================================================================
   var Views = {};
 
+  // ---- Session card: pick which routines to do now ----------------------
+  // picked[date][routineId] = ticked. Defaults to "not done yet today".
+  var picked = {};
+  function pickedFor(key, ds) {
+    var p = picked[key] || (picked[key] = {});
+    ds.plan.routines.forEach(function (r) { if (!(r.id in p)) p[r.id] = ds.doneRoutines.indexOf(r.id) === -1; });
+    return p;
+  }
+  function selectedRoutines(key, ds) {
+    ds = ds || dayStatus(key);
+    var p = pickedFor(key, ds);
+    return ds.plan.routines.filter(function (r) { return p[r.id]; });
+  }
+  // "2 rounds" / "1 set"
+  function roundsText(rid, n) {
+    var lbl = ((PLAN.routines[rid] || {}).roundLabel || "round").toLowerCase();
+    return n + " " + lbl + (n === 1 ? "" : "s");
+  }
+  function describeEffect(effId) {
+    var e = PLAN.activityEffects[effId];
+    if (!e || !e.plan) return "no change to the day's plan";
+    return Object.keys(e.plan).map(function (id) {
+      var v = e.plan[id], r = PLAN.routines[id];
+      if (!r) return id;
+      if (v === "full" || !v.rounds) return r.name.toLowerCase();
+      return v.rounds + " " + (r.roundLabel || "round").toLowerCase() + (v.rounds === 1 ? "" : "s") + " of " + r.name.toLowerCase();
+    }).join(" + ") + " (only what's scheduled that day)";
+  }
+
+  function sessionCardHtml(key, ds, title) {
+    var plan = ds.plan, p = pickedFor(key, ds);
+    var sel = plan.routines.filter(function (r) { return p[r.id]; });
+    var allDone = plan.routines.length && ds.doneRoutines.length === plan.routines.length;
+    var est = sel.length ? Session.buildSession(key, { routines: sel }).estSeconds : 0;
+    var rows = plan.routines.map(function (r) {
+      var def = PLAN.routines[r.id], done = ds.doneRoutines.indexOf(r.id) !== -1;
+      return '<li class="pick' + (p[r.id] ? " on" : "") + '"><label class="tick big"><input type="checkbox" data-pick="' + r.id + '"' + (p[r.id] ? " checked" : "") + ">" +
+        '<span><span class="r-name">' + esc(def.name) + (done ? ' <span class="chip ok">✓ done</span>' : "") + "</span>" +
+        '<span class="r-sum">' + esc(Session.routineSummary(r.id, plan.blockId, r.rounds)) + "</span></span></label></li>";
+    }).join("");
+    var dropped = plan.scheduled.filter(function (id) { return !plan.routines.some(function (r) { return r.id === id; }); });
+    var note = "";
+    if (plan.reduced) {
+      note = '<p class="note">' + esc(actLabel(plan.activity)) + (plan.activity.expected ? " (planned)" : "") + " — <b>" + esc(plan.effectLabel) + "</b> day, so the workout is lighter" +
+        (dropped.length ? "; skipping " + dropped.map(function (id) { return esc(PLAN.routines[id].name); }).join(", ") : "") +
+        '. <button class="link-btn" data-fullplan="1">Do the full plan anyway</button></p>';
+    } else if (Store.data.fullPlan[key]) {
+      note = '<p class="note">Full plan (your activity is ignored today). <button class="link-btn" data-fullplan="0">Use the lighter plan</button></p>';
+    }
+    var label;
+    if (!sel.length) label = allDone ? "All done today ✓" : "Tick a routine to start";
+    else if (sel.length === plan.routines.length && !ds.doneRoutines.length) label = key === today() ? "▶ Start today's workout" : "▶ Start this day's workout";
+    else if (sel.length === 1) label = "▶ Start " + PLAN.routines[sel[0].id].name;
+    else label = "▶ Start " + sel.length + " routines";
+    return '<section class="card session-card">' +
+      '<div class="card-head"><h2>' + esc(title) + "</h2>" + (sel.length ? '<span class="muted">≈ ' + minutes(est) + " min</span>" : "") + "</div>" + note +
+      '<p class="muted small">Tick what you want to do now — the rest stays open for later today.</p>' +
+      '<ul class="routine-pick">' + rows + "</ul>" +
+      (allDone ? '<p class="done-line">✓ Everything planned is done — nice work. Tick a routine to do it again.</p>' : "") +
+      '<button class="btn primary huge" data-start' + (sel.length ? "" : " disabled") + ">" + esc(label) + (sel.length ? "<kbd>G</kbd>" : "") + "</button>" +
+      (sel.length ? '<button class="btn ghost small" data-preview>Preview the queue</button>' : "") +
+      "</section>";
+  }
+
+  function bindSessionCard(root, key, rerender) {
+    $$("[data-pick]", root).forEach(function (cb) {
+      cb.onchange = function () { pickedFor(key, dayStatus(key))[cb.dataset.pick] = cb.checked; rerender(); };
+    });
+    $$("[data-fullplan]", root).forEach(function (b) {
+      b.onclick = function () {
+        if (b.dataset.fullplan === "1") Store.data.fullPlan[key] = true; else delete Store.data.fullPlan[key];
+        delete picked[key]; Store.save(); rerender();
+      };
+    });
+    var start = $("[data-start]", root);
+    if (start) start.onclick = function () { closeModal(); startSelected(key); };
+    var prev = $("[data-preview]", root);
+    if (prev) prev.onclick = function () { previewQueue(key, selectedRoutines(key)); };
+  }
+  function startSelected(key) {
+    var sel = selectedRoutines(key);
+    if (!sel.length) return toast("Tick at least one routine first");
+    startWorkout(key, sel);
+  }
+
+  // ---- Activity card: log other sports ----------------------------------
+  function activityCardHtml(key, ds) {
+    var acts = ds.activities, plan = ds.plan;
+    var expected = plan.activity && plan.activity.expected ? Session.activityDef(plan.activity.id) : null;
+    var effOpts = Object.keys(PLAN.activityEffects).map(function (e) { return '<option value="' + e + '">' + esc(PLAN.activityEffects[e].label) + "</option>"; }).join("");
+    var actOpts = PLAN.activities.map(function (a) { return '<option value="' + a.id + '">' + esc(a.icon + " " + a.name) + "</option>"; }).join("");
+    var first = expected || PLAN.activities[0];
+    var list = acts.map(function (a) {
+      return '<li><span>' + esc(actLabel(a)) + ' <span class="chip">' + esc((PLAN.activityEffects[a.effect] || {}).label || a.effect) + '</span></span><button class="icon-btn" data-del-act="' + esc(a.id) + '" aria-label="Remove">✕</button></li>';
+    }).join("");
+    return '<section class="card activity-card"><div class="card-head"><h2>🏅 Other activity</h2></div>' +
+      (list ? '<ul class="act-list">' + list + "</ul>" : '<p class="muted">Played a sport today? Log it and the workout gets lighter.</p>') +
+      (expected ? '<button class="btn primary" data-quick-act="' + expected.id + '">' + esc(expected.icon) + " Played " + esc(expected.name.toLowerCase()) + " (" + expected.minutes + " min)</button>" : "") +
+      '<div class="act-form">' +
+        '<label class="field"><span>Activity</span><select data-act-sel>' + actOpts + "</select></label>" +
+        '<label class="field" data-act-name-wrap hidden><span>Name</span><input type="text" data-act-name placeholder="e.g. Cricket"></label>' +
+        '<label class="field"><span>Minutes</span><input type="number" min="0" max="600" inputmode="numeric" data-act-min value="' + first.minutes + '"></label>' +
+        '<label class="field"><span>How hard</span><select data-act-eff>' + effOpts + "</select></label>" +
+        '<button class="btn" data-act-log>Log</button>' +
+      "</div>" +
+      '<p class="muted small" data-act-help></p></section>';
+  }
+
+  function bindActivityCard(root, key, rerender) {
+    var sel = $("[data-act-sel]", root);
+    if (!sel) return;
+    var eff = $("[data-act-eff]", root), min = $("[data-act-min]", root), help = $("[data-act-help]", root);
+    var nameWrap = $("[data-act-name-wrap]", root), name = $("[data-act-name]", root);
+    var showHelp = function () { help.textContent = PLAN.activityEffects[eff.value].label + ": " + describeEffect(eff.value) + "."; };
+    var expected = $("[data-quick-act]", root);
+    if (expected) sel.value = expected.dataset.quickAct;
+    var sync = function () {
+      var a = Session.activityDef(sel.value);
+      eff.value = a.effect; min.value = a.minutes;
+      nameWrap.hidden = a.id !== "other";
+      showHelp();
+    };
+    sel.onchange = sync;
+    eff.onchange = showHelp;
+    sync();
+    var log = function (actId, minutes, effect, customName) {
+      var a = Session.activityDef(actId);
+      var list = Store.data.activities[key] || (Store.data.activities[key] = []);
+      list.push({ id: uid(), activity: a.id, name: customName || a.name, icon: a.icon, effect: effect || a.effect, minutes: minutes, at: new Date().toISOString() });
+      delete picked[key];
+      Store.save();
+      var plan = planFor(key);
+      toast(a.icon + " " + (customName || a.name) + " logged — " + (plan.reduced ? "workout reduced" : "plan unchanged"));
+      rerender();
+    };
+    $("[data-act-log]", root).onclick = function () {
+      var custom = sel.value === "other" ? name.value.trim() : "";
+      log(sel.value, Math.max(0, parseInt(min.value, 10) || 0), eff.value, custom);
+    };
+    if (expected) expected.onclick = function () { var a = Session.activityDef(expected.dataset.quickAct); log(a.id, a.minutes, a.effect); };
+    $$("[data-del-act]", root).forEach(function (b) {
+      b.onclick = function () {
+        Store.data.activities[key] = activitiesOn(key).filter(function (a) { return a.id !== b.dataset.delAct; });
+        if (!Store.data.activities[key].length) delete Store.data.activities[key];
+        delete picked[key];
+        Store.save(); rerender();
+      };
+    });
+  }
+
   Views.today = function () {
     var t = today();
     var ds = dayStatus(t), info = ds.info;
     var n = info.dayNumber, total = info.totalDays;
-    var sess = Session.buildSession(t);
-    var doneToday = ds.sessions.some(function (s) { return s.status === "complete"; });
     var wk = currentWeek();
     var wkStats = wk ? weekStats(wk) : null;
     var c = checklistFor(t), wItem = waterItem();
@@ -498,10 +680,6 @@
     var head = info.inPlan
       ? "Day " + n + ' <span class="of">of ' + total + "</span>"
       : n < 1 ? "Starts in " + (1 - n) + " day" + (n === 0 ? "" : "s") : "Plan complete";
-
-    var routines = sess.routines.map(function (r) {
-      return '<li><span class="r-name">' + esc(r.name) + '</span><span class="r-sum">' + esc(Session.routineSummary(r.id, sess.blockId)) + "</span></li>";
-    }).join("");
 
     var html = '<header class="page-head"><div>' +
       '<p class="eyebrow">' + esc(longDate(t)) + (DATE_OVERRIDE ? ' <span class="chip warn">preview date</span>' : "") + "</p>" +
@@ -511,15 +689,7 @@
 
     html += '<div class="dash">';
 
-    // Session card
-    html += '<section class="card session-card">' +
-      '<div class="card-head"><h2>Today\'s session</h2><span class="muted">≈ ' + minutes(sess.estSeconds) + " min · " + sess.steps.length + " steps</span></div>" +
-      (info.schedule.football ? '<p class="note">⚽ Football first (' + info.schedule.football.minutes + " min) — then this mobility session.</p>" : "") +
-      '<ol class="routine-list">' + routines + "</ol>" +
-      (doneToday ? '<p class="done-line">✓ Logged today — nice work.</p>' : "") +
-      '<button class="btn primary huge" id="startBtn">' + (doneToday ? "Start again" : "▶ Start today's workout") + '<kbd>G</kbd></button>' +
-      '<button class="btn ghost small" id="previewBtn">Preview the full queue</button>' +
-      "</section>";
+    html += sessionCardHtml(t, ds, "Today's session");
 
     // Progress ring
     html += '<section class="card ring-card">' + progressRing(n) +
@@ -527,14 +697,7 @@
       '<div class="stat"><b>' + Session.planDays().filter(function (d) { return dayStatus(d).status === "done"; }).length + '</b><span>days done</span></div>' +
       legend() + "</div></section>";
 
-    // Football (Mondays)
-    if (info.schedule.football) {
-      var fb = Store.data.football[t];
-      html += '<section class="card football-card"><div class="card-head"><h2>⚽ Football</h2>' + (fb ? '<span class="chip ok">Logged · ' + fb.minutes + " min</span>" : "") + "</div>" +
-        '<div class="row gap wrap"><label class="field inline"><span>Minutes</span><input type="number" id="fbMin" min="0" max="240" inputmode="numeric" value="' + (fb ? fb.minutes : info.schedule.football.minutes) + '"></label>' +
-        '<button class="btn ' + (fb ? "ghost" : "primary") + '" id="fbBtn">' + (fb ? "Update" : "Played football") + "</button>" +
-        (fb ? '<button class="btn ghost" id="fbUndo">Remove</button>' : "") + "</div></section>";
-    }
+    html += activityCardHtml(t, ds);
 
     // Checkpoint
     if (info.isCheckpoint) {
@@ -566,16 +729,9 @@
     html += "</div>";
     view(html);
 
-    $("#startBtn").onclick = function () { startWorkout(t); };
-    $("#previewBtn").onclick = function () { previewQueue(t); };
+    bindSessionCard($("#view"), t, render);
+    bindActivityCard($("#view"), t, render);
     bindWaterButtons(t);
-    if (info.schedule.football) {
-      $("#fbBtn").onclick = function () {
-        Store.data.football[t] = { minutes: Math.max(0, parseInt($("#fbMin").value, 10) || 0), at: new Date().toISOString() };
-        Store.save(); toast("Football logged ⚽"); render();
-      };
-      if ($("#fbUndo")) $("#fbUndo").onclick = function () { delete Store.data.football[t]; Store.save(); render(); };
-    }
     if (info.isCheckpoint) {
       $("#cpPhoto").onchange = function () { Store.data.checkpoints[t] = { photo: this.checked }; Store.save(); };
       if ($("#cpSave")) $("#cpSave").onclick = function () {
@@ -607,8 +763,8 @@
     return null;
   }
 
-  function previewQueue(key) {
-    var sess = Session.buildSession(key);
+  function previewQueue(key, routines) {
+    var sess = Session.buildSession(key, routines ? { routines: routines } : { activities: activitiesOn(key), fullPlan: !!Store.data.fullPlan[key] });
     var rows = sess.steps.map(function (s, i) {
       var what, cls = s.kind;
       if (s.kind === "move") {
@@ -631,7 +787,7 @@
       var ds = dayStatus(d), p = dateParts(d);
       var blockStart = PLAN.blocks.filter(function (b) { return b.start === d; })[0];
       var icons = "";
-      if (ds.football) icons += "⚽";
+      ds.activities.forEach(function (a) { icons += a.icon || "🏅"; });
       if (ds.info.isCheckpoint) icons += "📸";
       if (ds.status === "rest" || (ds.info.schedule.rest && ds.status === "done")) icons += "☾";
       cells += '<button class="cal-day s-' + ds.status + (d === t ? " is-today" : "") + '" data-date="' + d + '">' +
@@ -656,29 +812,26 @@
       html += "<h3>Workouts logged</h3>" + ds.sessions.map(function (s) {
         return '<div class="log-entry"><div class="row between"><b>' + (s.status === "complete" ? "✓ Complete" : "◐ Partial") + "</b><span class=\"muted\">" +
           new Date(s.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " · " + minutes(s.durationSec) + " min</span></div>" +
-          '<p class="muted">' + s.routines.map(function (r) { return (r.done ? "✓ " : "✗ ") + esc(r.name) + " (" + r.movesDone + "/" + r.movesTotal + ")"; }).join(" · ") + "</p>" +
+          '<p class="muted">' + s.routines.map(function (r) { return (r.done ? "✓ " : "✗ ") + esc(r.name) + (r.rounds && r.rounds < (Session.fullRounds(r.id, s.blockId) || 0) ? ", " + roundsText(r.id, r.rounds) : "") + " (" + r.movesDone + "/" + r.movesTotal + " moves)"; }).join(" · ") + "</p>" +
           "<p>💧 " + s.waterBreaks + " water break" + (s.waterBreaks === 1 ? "" : "s") + (s.movesSkipped ? " · " + s.movesSkipped + " skipped" : "") +
           (s.rating ? " · Felt " + "★".repeat(s.rating) + "☆".repeat(5 - s.rating) : "") + "</p>" +
           (s.note ? '<p class="note">' + esc(s.note) + "</p>" : "") +
           '<button class="btn ghost small" data-del-session="' + s.id + '">Delete this log</button></div>';
       }).join("");
     } else html += '<p class="muted">No workout logged.</p>';
-    if (info.schedule.football) html += "<h3>Football</h3>" + (ds.football ? "<p>⚽ Played · " + ds.football.minutes + " min</p>" : '<p class="muted">Not logged.</p>') +
-      '<div class="row gap"><button class="btn small" id="ddFb">' + (ds.football ? "Remove football log" : "Log football (" + info.schedule.football.minutes + " min)") + "</button></div>";
+    html += '<div class="modal-cards">' + activityCardHtml(key, ds) + sessionCardHtml(key, ds, "Workout for this day") + "</div>";
     var ticks = PLAN.checklist.filter(function (i) { return isTicked(key, i); });
     html += "<h3>Checklist · " + ticks.length + "/" + PLAN.checklist.length + "</h3><p>" + (ticks.length ? ticks.map(function (i) { return "✓ " + esc(i.label); }).join("<br>") : '<span class="muted">Nothing ticked.</span>') + "</p>" +
       '<p class="muted">💧 ' + (checklistFor(key).waterMl / 1000) + " L water</p>";
     var body = Store.data.body.filter(function (b) { return b.date === key; });
     if (body.length) html += "<h3>Body</h3><p>" + body.map(function (b) { return (b.weight ? b.weight + " kg " : "") + (b.waist ? b.waist + " cm waist" : ""); }).join("<br>") + "</p>";
-    html += '<div class="row gap wrap end"><a class="btn ghost" href="#checklist" data-close data-goto-day="' + key + '">Edit checklist</a><button class="btn primary" id="ddStart">Do this day\'s workout</button></div>';
+    html += '<div class="row gap wrap end"><a class="btn ghost" href="#checklist" data-close data-goto-day="' + key + '">Edit checklist</a></div>';
     var m = openModal(html);
-    $("#ddStart", m).onclick = function () { closeModal(); startWorkout(key); };
+    $(".modal-card", m).classList.add("wide");
+    var again = function () { closeModal(); render(); dayDetail(key); };
+    bindSessionCard(m, key, again);
+    bindActivityCard(m, key, again);
     $("[data-goto-day]", m).onclick = function () { checklistDay = key; };
-    if ($("#ddFb", m)) $("#ddFb", m).onclick = function () {
-      if (ds.football) delete Store.data.football[key];
-      else Store.data.football[key] = { minutes: info.schedule.football.minutes, at: new Date().toISOString() };
-      Store.save(); closeModal(); render(); dayDetail(key);
-    };
     $$("[data-del-session]", m).forEach(function (b) {
       b.onclick = function () {
         confirmModal("Delete this workout log?", "This can't be undone.", "Delete", function () {
@@ -891,7 +1044,7 @@
 
   Views.settings = function () {
     var st = Store.data.settings;
-    var counts = Store.data.sessions.length + " workouts · " + Object.keys(Store.data.checklist).length + " checklist days · " + Store.data.body.length + " body entries · " + Object.keys(Store.data.football).length + " football logs";
+    var counts = Store.data.sessions.length + " workouts · " + Object.keys(Store.data.checklist).length + " checklist days · " + Store.data.body.length + " body entries · " + Object.keys(Store.data.activities).length + " activity days";
     var canShare = !!(navigator.canShare && window.File && (function () { try { return navigator.canShare({ files: [new File(["{}"], "x.json", { type: "application/json" })] }); } catch (e) { return false; } })());
     var standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
     view('<header class="page-head"><div><p class="eyebrow">Sound, data, shortcuts</p><h1>Data &amp; settings</h1></div></header><div class="dash">' +
@@ -919,7 +1072,7 @@
       "<tr><td><kbd>1</kbd>–<kbd>7</kbd></td><td>Switch page</td></tr><tr><td><kbd>H</kbd></td><td>How-to guide for the current / next move (pauses the timer)</td></tr><tr><td><kbd>G</kbd></td><td>Start today's workout</td></tr>" +
       "<tr><td><kbd>Space</kbd> / <kbd>Enter</kbd></td><td>Done (rep moves) · skip rest</td></tr><tr><td><kbd>P</kbd></td><td>Pause / resume</td></tr>" +
       "<tr><td><kbd>S</kbd></td><td>Skip move or rest</td></tr><tr><td><kbd>+</kbd></td><td>+15 s rest</td></tr><tr><td><kbd>M</kbd></td><td>Mute</td></tr>" +
-      "<tr><td><kbd>V</kbd></td><td>Voice commands on / off</td></tr><tr><td><kbd>F</kbd></td><td>Full screen</td></tr><tr><td><kbd>Esc</kbd></td><td>End workout early</td></tr></tbody></table></section>" +
+      "<tr><td><kbd>R</kbd></td><td>Skip the rest of the current routine</td></tr><tr><td><kbd>V</kbd></td><td>Voice commands on / off</td></tr><tr><td><kbd>F</kbd></td><td>Full screen</td></tr><tr><td><kbd>Esc</kbd></td><td>End workout early</td></tr></tbody></table></section>" +
       '<section class="card"><h2>Reset</h2><p class="muted">Export first — this deletes everything on this device.</p><button class="btn danger" id="sReset">Delete all data on this device</button></section></div>');
 
     $("#sMute").onchange = function () { st.muted = this.checked; Store.save(); };
@@ -962,7 +1115,7 @@
     if ($("#sShare")) $("#sShare").onclick = function () { exportData(true); };
     $("#sImport").onchange = function () { if (this.files[0]) importFile(this.files[0]); this.value = ""; };
     $("#sReset").onclick = function () {
-      confirmModal("Delete all data?", "Every workout log, checklist, football and body entry on <b>this device</b> will be removed. This can't be undone.", "Delete everything", function () {
+      confirmModal("Delete all data?", "Every workout log, checklist, activity and body entry on <b>this device</b> will be removed. This can't be undone.", "Delete everything", function () {
         var settings = Store.data.settings;
         Store.data = Store.blank(); Store.data.settings = settings; Store.save(); toast("All data deleted"); render();
       }, true);
@@ -1001,14 +1154,14 @@
       if (!d || !Array.isArray(d.sessions) || typeof d.checklist !== "object") return toast("That doesn't look like a 45 Days backup");
       var res = mergeData(d);
       Store.save(); render();
-      toast("Imported: " + res.sessions + " new workouts, " + res.days + " checklist days, " + res.body + " body entries, " + res.football + " football logs", 5000);
+      toast("Imported: " + res.sessions + " new workouts, " + res.days + " checklist days, " + res.body + " body entries, " + res.activities + " activities", 5000);
     };
     r.readAsText(file);
   }
 
   // Merge never deletes: union by id, OR the ticks, keep the larger water count.
   function mergeData(d) {
-    var D = Store.data, res = { sessions: 0, days: 0, body: 0, football: 0 };
+    var D = Store.data, res = { sessions: 0, days: 0, body: 0, activities: 0 };
     var have = {};
     D.sessions.forEach(function (s) { have[s.id] = s; });
     (d.sessions || []).forEach(function (s) {
@@ -1025,7 +1178,15 @@
     var bodyIds = {};
     D.body.forEach(function (b) { bodyIds[b.id] = 1; });
     (d.body || []).forEach(function (b) { if (!bodyIds[b.id]) { D.body.push(b); res.body++; } });
-    Object.keys(d.football || {}).forEach(function (k) { if (!D.football[k]) { D.football[k] = d.football[k]; res.football++; } });
+    // Activities: union by id. Older backups still have { football: { date: { minutes } } }.
+    Object.keys(d.activities || {}).forEach(function (k) {
+      var list = D.activities[k] || (D.activities[k] = []);
+      (d.activities[k] || []).forEach(function (a) {
+        if (!list.some(function (x) { return x.id === a.id; })) { list.push(a); res.activities++; }
+      });
+    });
+    if (d.football) { var before = JSON.stringify(D.activities); migrateFootball(D, d.football); if (JSON.stringify(D.activities) !== before) res.activities++; }
+    Object.keys(d.fullPlan || {}).forEach(function (k) { D.fullPlan[k] = true; });
     Object.keys(d.checkpoints || {}).forEach(function (k) {
       D.checkpoints[k] = { photo: !!((D.checkpoints[k] || {}).photo || d.checkpoints[k].photo) };
     });
@@ -1042,11 +1203,14 @@
     renderStatus: function () {},
   };
 
-  function startWorkout(key) {
+  // routines: [{ id, rounds }] to do now (default: everything left in the day's plan).
+  function startWorkout(key, routines) {
     // Everything here runs inside the click/keypress, which is what unlocks audio on Safari.
     Sound.unlock();
     Sound.voiceState = Sound.voiceState === "ok" ? "ok" : "unknown";
-    var sess = Session.buildSession(key);
+    var sess = Session.buildSession(key, { routines: routines || selectedRoutines(key) });
+    if (!sess.steps.length) return toast("Nothing to do — tick a routine first");
+    Player.skippedRoutines = {};
     Player.session = sess;
     Player.steps = sess.steps;
     Player.i = -1;
@@ -1083,6 +1247,7 @@
           '<button class="pl-btn" id="plMic" title="Voice commands on/off (V)">🎙</button>' +
           '<button class="pl-btn" id="plMute" title="Mute (M)"></button>' +
           (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen ? '<button class="pl-btn" id="plFull" title="Full screen (F)">⛶</button>' : "") +
+          '<button class="pl-btn" id="plSkipR" title="Skip the rest of this routine (R)">⏭ Routine</button>' +
           '<button class="pl-btn" id="plPause" title="Pause (P)">❚❚</button>' +
           '<button class="pl-btn danger" id="plEnd" title="End early (Esc)">End</button>' +
         "</div>" +
@@ -1108,6 +1273,7 @@
     $("#plMic").onclick = toggleListen;
     if ($("#plFull")) $("#plFull").onclick = toggleFullscreen;
     $("#plPause").onclick = togglePause;
+    $("#plSkipR").onclick = askSkipRoutine;
     $("#plPaused").onclick = togglePause;
     $("#plEnd").onclick = askEnd;
     Player.renderStatus = renderStatus;
@@ -1195,6 +1361,12 @@
         playerGuide(); return "How-to guide — say “close” to carry on";
       case "repeat":
         Sound.say(describeStep()); return "Repeating";
+      case "skipRoutine":
+        if (Player.paused) return "Paused — say “resume” first";
+        var rr = currentRoutine();
+        if (!rr) return null;
+        skipRoutine();
+        return "Skipped " + rr.name;
       case "end":
         askEnd();
         Sound.say("End the workout?"); // don't say "yes"/"no" aloud: the echo guard would then ignore the answer
@@ -1421,6 +1593,37 @@
     modalOnClose = function () { if (Player.active && !Player.done && Player.paused && !wasPaused) togglePause(); };
   }
 
+  // ---- Skip a whole routine (go straight to the next one) ----------------
+  // The routine you're in; during a water break / get-ready, the one coming up.
+  function currentRoutine() {
+    var st = cur();
+    if (!st) return null;
+    var rid = st.routineId;
+    if (!rid) { var nm = Session.nextMove(Player.steps, Player.i); rid = nm && nm.routineId; }
+    return rid ? { id: rid, name: PLAN.routines[rid].name } : null;
+  }
+  function askSkipRoutine() {
+    if (!Player.active || Player.done || Player.paused) return;
+    var r = currentRoutine();
+    if (!r) return;
+    skipRoutine();
+    toast("⏭ Skipped " + r.name);
+  }
+  function skipRoutine() {
+    var r = currentRoutine();
+    if (!r) return;
+    var last = Player.i;
+    for (var j = Player.i; j < Player.steps.length; j++) {
+      if (Player.steps[j].routineId === r.id) last = j;
+      else if (Player.steps[j].routineId && j > Player.i) break;
+    }
+    for (var k = Player.i; k < last; k++) Player.outcomes[k] = "skipped";
+    Player.skippedRoutines[r.id] = true;
+    Player.i = last;
+    Sound.stopVoice();
+    next("skipped");
+  }
+
   // The move the How-to button explains: the current move, or the next one during rests.
   function guideTarget() {
     var st = cur();
@@ -1455,13 +1658,15 @@
       var moves = steps.filter(function (s) { return s.kind === "move" && s.routineId === r.id; });
       var reached = moves.filter(function (s) { return Player.outcomes[s.n]; });
       return {
-        id: r.id, name: r.name,
-        done: moves.length > 0 && reached.length === moves.length,
+        id: r.id, name: r.name, rounds: r.rounds,
+        done: moves.length > 0 && reached.length === moves.length && !Player.skippedRoutines[r.id],
         movesDone: moves.filter(function (s) { return Player.outcomes[s.n] === "done"; }).length,
         movesTotal: moves.length,
       };
     });
     var moveSteps = steps.filter(function (s) { return s.kind === "move"; });
+    // Reaching the end counts as complete only if no routine was skipped wholesale.
+    if (status === "complete" && !routines.every(function (r) { return r.done; })) status = "partial";
     var rec = {
       id: uid(),
       date: sess.date,
@@ -1481,11 +1686,17 @@
       note: "",
     };
     Store.data.sessions.push(rec);
-    if (status === "complete") {
+    delete picked[sess.date];
+    var day = dayStatus(sess.date);
+    rec.dayDone = day.status === "done";
+    rec.leftToday = day.plan.routines.filter(function (p) { return day.doneRoutines.indexOf(p.id) === -1; }).map(function (p) { return PLAN.routines[p.id].name; });
+    if (rec.dayDone) {
       var c = Store.data.checklist[sess.date] || (Store.data.checklist[sess.date] = { items: {}, waterMl: 0 });
       c.items.workout = true;
+    }
+    if (status === "complete") {
       Sound.finish();
-      Sound.say("Workout complete. Great job!");
+      Sound.say(rec.dayDone ? "Workout complete. Great job!" : "Session done. Nice work.");
     }
     Store.save();
     Player.record = rec;
@@ -1497,12 +1708,13 @@
     p.dataset.kind = "summary";
     p.innerHTML = '<div class="pl-summary">' +
       '<p class="eyebrow">' + esc(longDate(rec.date)) + " · Day " + rec.dayNumber + "</p>" +
-      "<h1>" + (rec.status === "complete" ? "Workout complete 🎉" : "Logged as partial") + "</h1>" +
+      "<h1>" + (rec.dayDone ? "Day complete 🎉" : rec.status === "complete" ? "Session done ✓" : "Logged as partial") + "</h1>" +
+      (rec.leftToday && rec.leftToday.length ? '<p class="note">Still open today: <b>' + rec.leftToday.map(esc).join(", ") + "</b> — start " + (rec.leftToday.length > 1 ? "them" : "it") + " from the Today page whenever you're ready.</p>" : "") +
       '<div class="stats4"><div class="stat"><b>' + clock(rec.durationSec) + '</b><span>duration</span></div>' +
       '<div class="stat"><b>' + rec.movesDone + "<small>/" + rec.movesTotal + '</small></b><span>moves done</span></div>' +
       '<div class="stat"><b>' + rec.waterBreaks + '</b><span>water breaks</span></div>' +
       '<div class="stat"><b>' + rec.routines.filter(function (r) { return r.done; }).length + "<small>/" + rec.routines.length + '</small></b><span>routines</span></div></div>' +
-      '<p class="muted">' + rec.routines.map(function (r) { return (r.done ? "✓ " : "✗ ") + esc(r.name); }).join(" · ") + "</p>" +
+      '<p class="muted">' + rec.routines.map(function (r) { return (r.done ? "✓ " : "✗ ") + esc(r.name) + (r.rounds && r.rounds < (Session.fullRounds(r.id, rec.blockId) || 0) ? " (" + roundsText(r.id, r.rounds) + ")" : ""); }).join(" · ") + "</p>" +
       "<h2>How did it feel?</h2>" +
       '<div class="rating" id="rating">' + [1, 2, 3, 4, 5].map(function (n) {
         return '<button data-r="' + n + '"><b>' + n + "</b><small>" + ["Awful", "Hard", "OK", "Good", "Great"][n - 1] + "</small></button>";
@@ -1567,6 +1779,7 @@
       else if (k === "m" || k === "M") toggleMute();
       else if (k === "h" || k === "H") playerGuide();
       else if (k === "v" || k === "V") toggleListen();
+      else if (k === "r" || k === "R") askSkipRoutine();
       else if ((k === "f" || k === "F") && $("#plFull")) toggleFullscreen();
       else if (k === "Escape") askEnd();
       return;
@@ -1574,7 +1787,7 @@
     if (Player.active) return;
     var views = ["today", "calendar", "checklist", "body", "guide", "weekly", "settings"];
     if (/^[1-7]$/.test(k)) location.hash = "#" + views[Number(k) - 1];
-    else if (k === "g" || k === "G") { e.preventDefault(); startWorkout(today()); }
+    else if ((k === "g" || k === "G") && currentView() === "today") { e.preventDefault(); startSelected(today()); }
   });
 
   // =====================================================================

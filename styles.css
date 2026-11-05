@@ -248,6 +248,26 @@ input:focus, textarea:focus, .btn:focus-visible, .cal-day:focus-visible { outlin
 .tbl th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; }
 .tbl.keys kbd { margin: 0; opacity: 0.9; }
 
+/* ---------- Routine picker + activity log ---------- */
+.routine-pick { list-style: none; padding: 0; margin: 8px 0; }
+.routine-pick li { border-bottom: 1px dashed var(--line); padding: 4px 0; }
+.routine-pick li:not(.on) .r-name, .routine-pick li:not(.on) .r-sum { opacity: 0.55; }
+.routine-pick .tick { align-items: flex-start; padding: 8px 0; }
+.routine-pick .tick input { margin-top: 2px; }
+.btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--mustard); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
+.act-list { list-style: none; padding: 0; margin: 4px 0 12px; }
+.act-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line); font-weight: 600; }
+.act-form { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); align-items: end; margin-top: 14px; }
+.act-form [hidden] { display: none; }
+select, input[type="text"] {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-height: 48px;
+  color: var(--text); font-size: 1rem; width: 100%;
+}
+.modal-cards { display: grid; gap: 14px; margin-top: 16px; }
+.modal-cards .card { background: var(--surface-2); }
+.modal-cards .btn.huge { font-size: 1.15rem; min-height: 64px; }
+
 /* ---------- Exercise guide ---------- */
 .guide-group { margin-bottom: 28px; }
 .guide-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
@@ -316,7 +336,8 @@ body.in-workout .toast.show { transform: translate(-50%, 0); }
 .pl-where { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: baseline; font-size: clamp(1.1rem, 2.4vmin + 0.4rem, 1.9rem); font-weight: 700; }
 .pl-where #plSection { color: var(--accent); font-family: var(--slab); }
 .pl-where #plRound { color: var(--text); }
-.pl-ctrl { display: flex; gap: 8px; align-items: center; }
+.pl-ctrl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+#plSkipR { font-size: 1rem; }
 .pl-elapsed { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 1.15rem; font-weight: 700; margin-right: 6px; }
 .pl-btn {
   min-width: 56px; min-height: 56px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface);

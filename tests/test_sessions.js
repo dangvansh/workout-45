@@ -16,7 +16,8 @@ const Session = ctx.Session;
 // ---------------- The plan, as written --------------------------------
 const SPEC = {
   schedule: {
-    mon: ["mobility"], tue: ["mobility", "core", "wallAbs"], wed: ["mobility", "strength"],
+    // Monday is a football day: mobility + 1 round of core (user change, 5 Nov).
+    mon: ["mobility", "core:1"], tue: ["mobility", "core", "wallAbs"], wed: ["mobility", "strength"],
     thu: ["mobility", "core", "wallAbs"], fri: ["mobility", "strength", "wallAbs"],
     sat: ["mobility", "walk", "wallAbs"], sun: ["mobility"],
   },
@@ -47,14 +48,17 @@ const SPEC = {
 };
 
 // ---------------- Expected token stream from the spec ------------------
-function expected(weekday, block) {
+// plan: ["mobility", "core:1", …] — ":N" limits rounds/sets. Default: the weekday's plan.
+function expected(weekday, block, plan) {
   const t = ["READY:5"];
-  const routines = SPEC.schedule[weekday];
+  const routines = (plan || SPEC.schedule[weekday]).map((x) => x.split(":")[0]);
+  const limit = Object.fromEntries((plan || SPEC.schedule[weekday]).map((x) => [x.split(":")[0], Number(x.split(":")[1]) || 0]));
   routines.forEach((rid, ri) => {
-    if (rid === "wallAbs" && t[t.length - 1] !== "WATER:45") t.push("WATER:45");
+    if (rid === "wallAbs" && t.length > 1 && t[t.length - 1] !== "WATER:45") t.push("WATER:45");
     if (rid === "mobility") SPEC.mobility.forEach((n) => t.push(`MOVE:${n}:60s` + (n === "Lizard twists" ? "+switch@30" : "")));
     if (rid === "core" || rid === "strength") {
-      const c = SPEC[rid], b = c[block];
+      const c = SPEC[rid], b = Object.assign({}, c[block]);
+      if (limit[rid]) b.rounds = Math.min(limit[rid], b.rounds);
       const targets = rid === "core"
         ? b.reps.map((r, i) => `${r}r` + (c.eachSide[i] ? "/side" : ""))
         : [`${b.reps}r`, `${b.reps}r`, `${b.reps}r/leg`, `${b.plank}s`, `${b.superman}s`, `${b.wallSit}s`];
@@ -70,7 +74,8 @@ function expected(weekday, block) {
       }
     }
     if (rid === "wallAbs") {
-      const c = SPEC.wallAbs, b = c[block];
+      const c = SPEC.wallAbs, b = Object.assign({}, c[block]);
+      if (limit[rid]) b.sets = Math.min(limit[rid], b.sets);
       for (let s = 1; s <= b.sets; s++) {
         c.moves.forEach((m, i) => {
           t.push(`MOVE:${m}:${b.reps}r`);
@@ -156,6 +161,48 @@ for (const block of ["A", "B", "C"]) {
     rows.push({ block, wd, sess });
   }
 }
+
+// ---------------- Activities (other sports) reduce the day -------------
+console.log("\nActivities and partial sessions");
+const plan = (d, acts, extra) => Session.dayPlan(d, Object.assign({ activities: acts }, extra)).routines.map((r) => r.id + (r.rounds ? ":" + r.rounds : "")).join(" ");
+const act = (id) => ({ effect: Session.activityDef(id).effect, name: id });
+[
+  // date, weekday note, activities, opts, expected plan
+  ["2026-11-09", "Mon, nothing logged (football expected)", [], {}, "mobility core:1"],
+  ["2026-11-09", "Mon + football", [act("football")], {}, "mobility core:1"],
+  ["2026-11-09", "Mon + padel", [act("padel")], {}, "mobility core:2 wallAbs:1"],
+  ["2026-11-09", "Mon, full plan anyway", [], { fullPlan: true }, "mobility core wallAbs"],
+  ["2026-11-05", "Thu + padel", [act("padel")], {}, "mobility core:2 wallAbs:1"],
+  ["2026-11-05", "Thu + football", [act("football")], {}, "mobility core:1"],
+  ["2026-11-05", "Thu + yoga (light)", [act("yoga")], {}, "mobility core wallAbs"],
+  ["2026-11-05", "Thu + yoga + football → strongest wins", [act("yoga"), act("football")], {}, "mobility core:1"],
+  ["2026-11-06", "Fri + padel", [act("padel")], {}, "mobility strength:2 wallAbs:1"],
+  ["2026-11-04", "Wed + football", [act("football")], {}, "mobility strength:1"],
+  ["2026-11-07", "Sat + padel (walk dropped)", [act("padel")], {}, "mobility wallAbs:1"],
+  ["2026-11-08", "Sun + football (never adds work)", [act("football")], {}, "mobility"],
+  ["2026-12-03", "Block C Thu + football (1 of 5 rounds)", [act("football")], {}, "mobility core:1"],
+].forEach(([d, label, acts, extra, want]) => {
+  const got = plan(d, acts, extra);
+  check(got === want, `${label}: got "${got}", expected "${want}"`);
+  console.log(`   ${got === want ? "ok  " : "FAIL"} ${label.padEnd(44)} → ${got}`);
+});
+
+// Queues built from a reduced plan / a picked subset match the spec too.
+[
+  ["2026-11-09", "mon", "A", null, ["mobility", "core:1"], "Mon default session"],
+  ["2026-11-05", "thu", "A", [{ id: "mobility" }, { id: "core", rounds: 2 }, { id: "wallAbs", rounds: 1 }], ["mobility", "core:2", "wallAbs:1"], "Thu padel session"],
+  ["2026-11-05", "thu", "A", [{ id: "core" }], ["core"], "Only the core circuit"],
+  ["2026-11-05", "thu", "A", [{ id: "wallAbs" }], ["wallAbs"], "Only wall abs (no water break first)"],
+  ["2026-11-05", "thu", "A", [{ id: "mobility" }, { id: "wallAbs" }], ["mobility", "wallAbs"], "Mobility + wall abs"],
+  ["2026-12-04", "fri", "C", [{ id: "strength", rounds: 1 }], ["strength:1"], "Block C strength, 1 round"],
+].forEach(([d, wd, block, routines, spec, label]) => {
+  const sess = Session.buildSession(d, routines ? { routines } : {});
+  const exp = expected(wd, block, spec), got = actual(sess);
+  const i = exp.findIndex((tok, k) => tok !== got[k]);
+  const same = exp.length === got.length && i === -1;
+  check(same, `${label}: differs at step ${i === -1 ? exp.length : i}: expected "${exp[i]}", got "${got[i]}"`);
+  console.log(`   ${same ? "ok  " : "FAIL"} ${label.padEnd(44)} ${got.length} steps, water breaks: ${sess.steps.filter((s) => s.kind === "water").length}`);
+});
 
 // Spot-print one full queue per main routine so a human can eyeball it.
 console.log("\nSample: Block C Thursday (core 5 rounds + wall abs 4 sets), first 16 steps:");

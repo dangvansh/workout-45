@@ -93,6 +93,18 @@ Open `config.js` in Notepad. Everything is commented. Examples:
 
 Save the file and reload the app. On the iPad, open the app while online so it picks up the new version. Then run `node tests/test_sessions.js`. It compares against the *original* plan, so deliberate changes show up as differences. That's expected.
 
+## Doing part of the day, and other sports
+
+- **Pick routines:** the Today card has a tick box for each routine. Start only the ones you want now. Anything you've finished is unticked automatically, so you can come back later for the rest. The day counts as done once every planned routine has been done across all of that day's sessions.
+- **Skip a routine mid-workout:** press **⏭ Routine** (or `R`, or say "skip routine"). This jumps to the next routine. The skipped one stays open for later.
+- **Other sports:** log football, padel, running and more on the Today page (or for any day, from the Calendar). Each sport has a strength rating that makes the day lighter:
+  - **Hard** (e.g. football): mobility + 1 round of core or strength.
+  - **Moderate** (e.g. padel): mobility + 2 rounds + 1 set of wall abs.
+  - **Light** (e.g. yoga): no change.
+- If you log more than one sport, the hardest one decides. An activity only ever removes work; it never adds routines that weren't scheduled.
+- **Mondays** expect football, so the plan is already lighter. Tap **Played football** once you've played. If you skip football, choose **Do the full plan anyway**.
+- Change sports, minutes and how much each rating removes in `activities` and `activityEffects` in `config.js`.
+
 ## Exercise guide and form videos
 
 The **Guide** page lists every move with step-by-step form cues and its safety tip. The cues work offline.

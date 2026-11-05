@@ -133,10 +133,12 @@ var Session = (function () {
     });
   }
 
-  function addCircuit(steps, routineId, routine, blockId) {
+  function addCircuit(steps, routineId, routine, blockId, roundsWanted) {
     var cfg = routine.blocks[blockId];
     var h = PLAN.hydration;
     var isMain = h.mainRoutines.indexOf(routineId) !== -1;
+    var rounds = roundsWanted ? Math.min(roundsWanted, cfg.rounds) : cfg.rounds;
+    cfg = { rounds: rounds, targets: cfg.targets };
     for (var r = 1; r <= cfg.rounds; r++) {
       routine.moves.forEach(function (m, i) {
         if (!(m.id in cfg.targets)) throw new Error("Block " + blockId + " of " + routineId + " has no target for move " + m.id);
@@ -190,29 +192,76 @@ var Session = (function () {
     });
   }
 
-  // Builds the full guided queue for a date: mobility first, then the main
+  // ---- Activities (other sports) and the day's plan ---------------------
+  function activityDef(id) {
+    return (PLAN.activities || []).filter(function (a) { return a.id === id; })[0] || null;
+  }
+  function fullRounds(rid, blockId) {
+    var r = PLAN.routines[rid];
+    return r && r.style === "circuit" ? r.blocks[blockId].rounds : null;
+  }
+
+  // What to do on a date: the weekday's routines, reduced by the strongest
+  // logged activity (or the weekday's expected one, e.g. football on Monday).
+  // opts.activities: [{ effect, name, ... }] logged that day; opts.fullPlan: ignore them.
+  // Returns { routines: [{ id, rounds }] } — rounds null means the block's full amount.
+  function dayPlan(key, opts) {
+    opts = opts || {};
+    var info = dayInfo(key), sch = info.schedule, blockId = info.block.id;
+    var effects = PLAN.activityEffects || {}, order = Object.keys(effects);
+    var effectId = null, source = null;
+    if (!opts.fullPlan) {
+      (opts.activities || []).forEach(function (a) {
+        if (a.effect in effects && (effectId === null || order.indexOf(a.effect) < order.indexOf(effectId))) { effectId = a.effect; source = a; }
+      });
+      if (!effectId && sch.activity && activityDef(sch.activity)) {
+        var def = activityDef(sch.activity);
+        effectId = def.effect; source = { id: def.id, name: def.name, icon: def.icon, expected: true };
+      }
+    }
+    var eff = effectId ? effects[effectId] : null;
+    var routines;
+    if (eff && eff.plan) {
+      routines = sch.routines.filter(function (id) { return id in eff.plan; }).map(function (id) {
+        var v = eff.plan[id], full = fullRounds(id, blockId);
+        return { id: id, rounds: v && v.rounds != null && full ? Math.min(v.rounds, full) : null };
+      });
+    } else {
+      routines = sch.routines.map(function (id) { return { id: id, rounds: null }; });
+    }
+    return {
+      key: key, blockId: blockId, routines: routines,
+      effect: effectId, effectLabel: eff ? eff.label : null,
+      activity: source, reduced: !!(eff && eff.plan),
+      scheduled: sch.routines.slice(),
+    };
+  }
+
+  // Builds the guided queue for a date: mobility first, then the main
   // routine, then wall abs, with water breaks and rests inserted.
+  // opts.routines: [{ id, rounds }] to do (default: the day's plan).
   function buildSession(key, opts) {
     opts = opts || {};
     var info = dayInfo(key);
     var blockId = info.block.id;
     var h = PLAN.hydration;
     var steps = [];
-    var routineIds = info.schedule.routines.slice();
+    var plan = opts.routines || dayPlan(key, opts).routines;
 
-    routineIds.forEach(function (rid) {
-      var routine = PLAN.routines[rid];
+    plan.forEach(function (p) {
+      var rid = p.id, routine = PLAN.routines[rid];
       if (!routine) throw new Error("Unknown routine '" + rid + "' in schedule");
       if (rid === "wallAbs" && h.beforeWallAbs) steps.push(waterStep("Before wall abs"));
       if (routine.style === "timed") addTimed(steps, rid, routine);
-      else if (routine.style === "circuit") addCircuit(steps, rid, routine, blockId);
+      else if (routine.style === "circuit") addCircuit(steps, rid, routine, blockId, p.rounds);
       else if (routine.style === "segments") addSegments(steps, rid, routine, blockId);
       else throw new Error("Unknown routine style '" + routine.style + "'");
       if (rid === "mobility" && h.afterMobility) steps.push(waterStep("After mobility"));
     });
 
-    // Never two water breaks in a row, and none as the very last step.
+    // Never two water breaks in a row, and none as the first or very last step.
     steps = steps.filter(function (s, i) { return !(s.kind === "water" && steps[i + 1] && steps[i + 1].kind === "water"); });
+    while (steps.length && steps[0].kind === "water") steps.shift();
     while (steps.length && (steps[steps.length - 1].kind === "water" || steps[steps.length - 1].kind === "rest")) steps.pop();
 
     if (opts.getReady !== false && PLAN.getReadySeconds > 0) {
@@ -225,7 +274,10 @@ var Session = (function () {
       dayNumber: info.dayNumber,
       blockId: blockId,
       dayLabel: info.schedule.label,
-      routines: routineIds.map(function (rid) { return { id: rid, name: PLAN.routines[rid].name }; }),
+      routines: plan.map(function (p) {
+        var full = fullRounds(p.id, blockId);
+        return { id: p.id, name: PLAN.routines[p.id].name, rounds: full ? Math.min(p.rounds || full, full) : null, fullRounds: full };
+      }),
       steps: steps,
       estSeconds: estimateSeconds(steps),
     };
@@ -245,7 +297,7 @@ var Session = (function () {
   }
 
   // One-line description of a routine for the given block (dashboard cards).
-  function routineSummary(rid, blockId) {
+  function routineSummary(rid, blockId, rounds) {
     var r = PLAN.routines[rid];
     if (r.style === "timed") {
       var t = r.moves.reduce(function (a, m) { return a + m.seconds; }, 0);
@@ -264,13 +316,15 @@ var Session = (function () {
       var t = normTarget(cfg.targets[m.id]);
       return t.seconds != null ? fmtSeconds(t.seconds) : t.show;
     });
-    return cfg.rounds + " " + (r.roundLabel || "round").toLowerCase() + "s × " + parts.join(" / ");
+    var n = rounds ? Math.min(rounds, cfg.rounds) : cfg.rounds;
+    var label = (r.roundLabel || "round").toLowerCase() + (n === 1 ? "" : "s");
+    return n + " " + label + (n < cfg.rounds ? " (of " + cfg.rounds + ")" : "") + " × " + parts.join(" / ");
   }
 
   return {
     parseKey: parseKey, localKey: localKey, addDays: addDays, diffDays: diffDays, weekdayOf: weekdayOf,
     totalDays: totalDays, dayNumber: dayNumber, planDays: planDays, blockFor: blockFor, dayInfo: dayInfo,
-    buildSession: buildSession, nextMove: nextMove, routineSummary: routineSummary,
+    buildSession: buildSession, dayPlan: dayPlan, activityDef: activityDef, fullRounds: fullRounds, nextMove: nextMove, routineSummary: routineSummary,
     targetText: targetText, speechTarget: speechTarget, fmtSeconds: fmtSeconds, saySeconds: saySeconds,
     WEEKDAY_NAMES: WEEKDAY_NAMES,
   };

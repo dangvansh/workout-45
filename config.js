@@ -46,10 +46,12 @@ var PLAN = {
 
   // ---- Weekly schedule ----------------------------------------------
   // routines run in the order listed (ids refer to `routines` below).
-  // football: shows the one-click "Played football" log for that day.
+  // activity: the sport you expect to play that day (an id from `activities`
+  //           below). Until you log something else, the day's plan is
+  //           already reduced for it. "Do the full plan anyway" undoes that.
   // rest: marks the day as a rest day on the calendar.
   schedule: {
-    mon: { label: "Football + Mobility", football: { minutes: 60 }, routines: ["mobility"] },
+    mon: { label: "Football day", activity: "football", routines: ["mobility", "core", "wallAbs"] },
     tue: { label: "Core day",            routines: ["mobility", "core", "wallAbs"] },
     wed: { label: "Strength day",        routines: ["mobility", "strength"] },
     thu: { label: "Core day",            routines: ["mobility", "core", "wallAbs"] },
@@ -267,6 +269,35 @@ var PLAN = {
     },
   },
 
+  // ---- Other sports / activities --------------------------------------
+  // Log these on the Today page. Logging one reduces that day's workout
+  // according to its `effect` (see activityEffects below). Change the
+  // default minutes or effect, or add your own sports here.
+  activities: [
+    { id: "football",  name: "Football",          icon: "⚽", minutes: 60, effect: "hard" },
+    { id: "padel",     name: "Padel",             icon: "🎾", minutes: 60, effect: "moderate" },
+    { id: "badminton", name: "Badminton",         icon: "🏸", minutes: 60, effect: "moderate" },
+    { id: "running",   name: "Running",           icon: "🏃", minutes: 30, effect: "hard" },
+    { id: "swimming",  name: "Swimming",          icon: "🏊", minutes: 45, effect: "moderate" },
+    { id: "cycling",   name: "Cycling",           icon: "🚴", minutes: 45, effect: "moderate" },
+    { id: "gym",       name: "Gym session",       icon: "🏋️", minutes: 60, effect: "hard" },
+    { id: "yoga",      name: "Yoga / stretching", icon: "🧘", minutes: 30, effect: "light" },
+    { id: "hike",      name: "Long walk / hike",  icon: "🥾", minutes: 60, effect: "light" },
+    { id: "other",     name: "Other",             icon: "➕", minutes: 45, effect: "moderate" },
+  ],
+
+  // What's left of the day's plan after an activity. Listed strongest first:
+  // with several activities on one day, the strongest one decides.
+  // In `plan`, each routine is "full", { rounds: N } (capped at that block's
+  // rounds/sets), or left out to drop it for the day. Only routines that
+  // are already scheduled for that weekday are ever kept — an activity never
+  // adds work. plan: null → the day's plan is unchanged.
+  activityEffects: {
+    hard:     { label: "Hard",     plan: { mobility: "full", core: { rounds: 1 }, strength: { rounds: 1 } } },
+    moderate: { label: "Moderate", plan: { mobility: "full", core: { rounds: 2 }, strength: { rounds: 2 }, wallAbs: { rounds: 1 } } },
+    light:    { label: "Light",    plan: null },
+  },
+
   // ---- Voice commands (hands-free control during a workout) ----------
   // The microphone is only on while a workout is running.
   voiceCommands: {
@@ -275,6 +306,7 @@ var PLAN = {
     // Checked top to bottom; the first match wins, so put longer phrases
     // ("stop workout") above shorter ones ("stop"). Whole words, any case.
     commands: [
+      { action: "skipRoutine", phrases: ["skip routine", "skip the routine", "skip this routine", "next routine", "skip circuit", "next circuit", "skip section", "next section"] },
       { action: "end",    phrases: ["end workout", "end the workout", "stop workout", "stop the workout", "finish workout", "quit workout", "end session"] },
       { action: "yes",    phrases: ["yes", "yeah", "yep", "confirm"] },           // only when a confirm box is open
       { action: "no",     phrases: ["no", "nope", "cancel", "never mind"] },      // ditto
