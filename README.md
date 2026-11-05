@@ -93,6 +93,16 @@ Open `config.js` in Notepad. Everything is commented. Examples:
 
 Save the file and reload the app. On the iPad, open the app while online so it picks up the new version. Then run `node tests/test_sessions.js`. It compares against the *original* plan, so deliberate changes show up as differences. That's expected.
 
+## Levels: hold a level instead of being pushed up
+
+Core circuit, wall abs, strength and walks each have their own level: **A**, **B** or **C**. Everything starts at A and **never moves up by itself**.
+
+- When a new block starts (18 Nov, 3 Dec), the Today page asks, for example, *"Ready to move core circuit up to Level B?"* Choose **Move up** or **Stay at A**.
+- After a session you're asked *"Could you have done 2–3 more reps with good form?"* for each routine. If you answer **No** twice in a row, the app suggests staying at your current level.
+- **Data & settings → Levels** lets you set any routine's level at any time, including moving down.
+- The calendar block still decides the **weekly schedule**. For example, wall abs moves back onto Tue/Fri from Block B. Your levels decide the **reps, holds and rest times**.
+- Each routine's reps and rests per level are under `levels` in `config.js`. Which routines share a level is set in `levelGroups`.
+
 ## Doing part of the day, and other sports
 
 - **Pick routines:** the Today card has a tick box for each routine. Start only the ones you want now. Anything you've finished is unticked automatically, so you can come back later for the rest. The day counts as done once every planned routine has been done across all of that day's sessions.
@@ -102,7 +112,7 @@ Save the file and reload the app. On the iPad, open the app while online so it p
   - **Moderate** (e.g. padel): mobility + 2 rounds + 1 set of wall abs.
   - **Light** (e.g. yoga): no change.
 - If you log more than one sport, the hardest one decides. An activity only ever removes work; it never adds routines that weren't scheduled.
-- **Mondays** expect football, so the plan is already lighter. Tap **Played football** once you've played. If you skip football, choose **Do the full plan anyway**.
+- **Mondays** are already planned around football (mobility + light core). Football has its own card: **Played** (with minutes) or **Didn't play**. It doesn't change the workout.
 - Change sports, minutes and how much each rating removes in `activities` and `activityEffects` in `config.js`.
 
 ## Exercise guide and form videos

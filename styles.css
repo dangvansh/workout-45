@@ -268,6 +268,23 @@ select, input[type="text"] {
 .modal-cards .card { background: var(--surface-2); }
 .modal-cards .btn.huge { font-size: 1.15rem; min-height: 64px; }
 
+/* ---------- Levels ---------- */
+.chip.lvl { border-color: var(--teal); color: var(--teal-bright); font-size: 0.72rem; }
+.tick span.r-name, .tick span.r-sum, .tick span.r-note { display: block; }
+.tick span.chip { display: inline-block; }
+.r-note { display: block; color: var(--mustard); font-size: 0.88rem; margin-top: 4px; }
+.feel { color: var(--text); background: var(--surface-2); border-radius: 10px; padding: 10px 12px; margin: 12px 0 0; font-size: 0.95rem; }
+.level-card { border-color: var(--mustard); }
+.level-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px dashed var(--line); }
+.level-row select { width: auto; min-width: 120px; }
+.more-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+.more-row .note { flex-basis: 100%; margin: 4px 0 0; }
+.more-row .note[hidden] { display: none; }
+.more-btns { display: flex; gap: 8px; }
+.more-btns button { min-height: 56px; min-width: 96px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); font-weight: 800; font-size: 1.1rem; cursor: pointer; }
+.more-btns button.on { background: var(--mustard); border-color: var(--mustard); color: #1a0d05; }
+.football-card .btn[disabled] { opacity: 0.45; }
+
 /* ---------- Exercise guide ---------- */
 .guide-group { margin-bottom: 28px; }
 .guide-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }

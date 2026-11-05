@@ -9,23 +9,74 @@
    Rules of thumb when editing:
    • Dates are "YYYY-MM-DD" strings.
    • Times are in SECONDS unless the field name says "minutes".
-   • A "target" for a move in a block can be:
-       40                          → 40 reps
-       { reps: 18, show: "15–20" } → 18 reps, but the screen shows "15–20"
-       { seconds: 45 }             → a 45-second timed hold (auto countdown)
-   • Every move "id" must be unique inside its routine, and each block's
+   • Routines with levels (core circuit, wall abs, strength, walks) have
+     settings for Level A, B and C. The level you're on is chosen in the
+     app (it never moves up by itself), NOT by the calendar.
+   • A "target" for a move at a level can be:
+       15                          → 15 reps
+       { reps: 9, show: "8–10" }   → 9 reps, but the screen shows "8–10"
+       { seconds: 20 }             → a 20-second timed hold (auto countdown)
+       { seconds: 40, name: "…" }  → …and show a different move name
+   • Every move "id" must be unique inside its routine, and each level's
      "targets" must list every move id of that routine.
+   • A level can override the routine's rests: restBetweenMoves / restBetweenRounds.
    • Exercise guide fields on a move (all optional):
        how:    ["step 1", "step 2", …]  → form steps shown in the guide
        video:  "https://youtu.be/…"     → a default video (plays in the app)
        search: "words"                  → what "Find a form video" searches
      A video pinned inside the app (Guide page) overrides `video`.
+   • tip: a key from `tips` below, or a list of keys.
    • After editing, reload the app. On the iPad, open the app once while
      online so it picks up the new version.
-   • Run `node tests/test_sessions.js` afterwards: it re-checks every day
-     type in every block (it will flag differences from the ORIGINAL plan,
-     which is expected if you changed reps on purpose).
+   • Run `node tests/test_sessions.js` afterwards: it re-checks every
+     weekday at every level against the plan as written (it flags any
+     difference, which is expected if you changed reps on purpose).
    ===================================================================== */
+
+// The four core-circuit moves (shared by the Monday light core).
+var CORE_MOVES = [
+  { id: "claps",     name: "Claps under the legs", search: "clap under legs abs exercise",
+    how: ["Lie on your back (or sit leaning back) with your core braced.",
+          "Lift one straight leg and clap your hands underneath it.",
+          "Lower it and switch legs. Keep your lower back from arching."] },
+  { id: "sameKnee",  name: "Same-side knee raises", eachSide: true, search: "standing same side knee to elbow crunch",
+    how: ["Stand tall, hands lightly behind your head.",
+          "Lift one knee to the side and crunch the same-side elbow down to meet it.",
+          "Do all the reps on one side, then the other."] },
+  { id: "kneePress", name: "Knee lifts with downward press", search: "standing knee raise with downward press abs",
+    how: ["Stand tall, hands at chest height, palms facing down.",
+          "Drive one knee up while pressing both palms down towards it, tightening your abs.",
+          "Alternate legs at a steady pace."] },
+  { id: "squatTwist", name: "Squat with torso twist", tip: "knee", search: "squat with torso twist",
+    how: ["Feet shoulder-width apart. Sit your hips back and down, chest up.",
+          "As you stand, rotate your torso to one side. Alternate sides each rep.",
+          "Knees track over your toes. Only go as deep as the knee is happy."] },
+];
+
+// ---- Weekly schedules ------------------------------------------------
+// Which routines run on each weekday, in order (ids refer to `routines`).
+// activity: the sport played that day (an id from `activities`): it gets
+//           its own log button and is already allowed for in the plan.
+// rest: marks the day as a rest day on the calendar.
+var SCHEDULE_A = {
+  mon: { label: "Light core + football", activity: "football", routines: ["mobility", "lightCore"] },
+  tue: { label: "Core day",              routines: ["mobility", "core"] },
+  wed: { label: "Strength day",          routines: ["mobility", "strength"] },
+  thu: { label: "Wall abs + walk",       routines: ["mobility", "wallAbs", "walkShort"] },
+  fri: { label: "Core day",              routines: ["mobility", "core"] },
+  sat: { label: "Walk + wall abs",       routines: ["mobility", "walk", "wallAbs"] },
+  sun: { label: "Rest day (mobility only)", rest: true, routines: ["mobility"] },
+};
+// Blocks B and C: wall abs moves back onto the core days.
+var SCHEDULE_BC = {
+  mon: { label: "Light core + football", activity: "football", routines: ["mobility", "lightCore"] },
+  tue: { label: "Core + wall abs",       routines: ["mobility", "core", "wallAbs"] },
+  wed: { label: "Strength day",          routines: ["mobility", "strength"] },
+  thu: { label: "Wall abs + walk",       routines: ["mobility", "wallAbs", "walkShort"] },
+  fri: { label: "Core + wall abs",       routines: ["mobility", "core", "wallAbs"] },
+  sat: { label: "Walk / jog + wall abs", routines: ["mobility", "walk", "wallAbs"] },
+  sun: { label: "Rest day (mobility only)", rest: true, routines: ["mobility"] },
+};
 
 var PLAN = {
   title: "45-Day Plan",
@@ -34,7 +85,8 @@ var PLAN = {
   startDate: "2026-11-03", // Day 1
   endDate: "2026-12-17",   // Day 45
 
-  // Blocks decide which reps/timers apply. They must cover start → end.
+  // Calendar blocks: they pick the weekly schedule and when a "move up a
+  // level?" prompt appears. They must cover start → end.
   blocks: [
     { id: "A", name: "Block A", start: "2026-11-03", end: "2026-11-17" },
     { id: "B", name: "Block B", start: "2026-11-18", end: "2026-12-02" },
@@ -44,53 +96,63 @@ var PLAN = {
   // Days that prompt for a progress photo + waist measurement.
   checkpoints: ["2026-11-03", "2026-11-25", "2026-12-17"],
 
-  // ---- Weekly schedule ----------------------------------------------
-  // routines run in the order listed (ids refer to `routines` below).
-  // activity: the sport you expect to play that day (an id from `activities`
-  //           below). Until you log something else, the day's plan is
-  //           already reduced for it. "Do the full plan anyway" undoes that.
-  // rest: marks the day as a rest day on the calendar.
-  schedule: {
-    mon: { label: "Football day", activity: "football", routines: ["mobility", "core", "wallAbs"] },
-    tue: { label: "Core day",            routines: ["mobility", "core", "wallAbs"] },
-    wed: { label: "Strength day",        routines: ["mobility", "strength"] },
-    thu: { label: "Core day",            routines: ["mobility", "core", "wallAbs"] },
-    fri: { label: "Strength + Wall abs", routines: ["mobility", "strength", "wallAbs"] },
-    sat: { label: "Walk / jog + Wall abs", routines: ["mobility", "walk", "wallAbs"] },
-    sun: { label: "Rest day (mobility only)", rest: true, routines: ["mobility"] },
+  schedules: { A: SCHEDULE_A, B: SCHEDULE_BC, C: SCHEDULE_BC },
+
+  // ---- Levels --------------------------------------------------------
+  // Each group keeps its own level (A → B → C). It starts at A and only
+  // moves when you say so: a prompt appears when a new block starts, and
+  // you can set any level (up or down) in Data & settings.
+  // askReps: after a session, ask "Could you have done 2–3 more reps?".
+  levels: ["A", "B", "C"],
+  levelGroups: {
+    core:     { name: "Core circuit", routines: ["core"],              askReps: true },
+    wallAbs:  { name: "Wall abs",     routines: ["wallAbs"],           askReps: true },
+    strength: { name: "Strength",     routines: ["strength"],          askReps: true },
+    walks:    { name: "Walks",        routines: ["walkShort", "walk"], askReps: false },
   },
 
   // ---- Guided-mode timing -------------------------------------------
   getReadySeconds: 5,       // countdown before the first move of a session
   restAddSeconds: 15,       // what the "+15 s" button adds to a rest
+  // Shown on the start screen of every guided session.
+  sessionNote: "Work hard but in control — you should still be able to say a short sentence. If you can't finish, stop and repeat this level next time.",
 
   // ---- Hydration ----------------------------------------------------
   hydration: {
     breakSeconds: 45,
     message: "Water break — take a few sips",
-    afterMobility: true,              // after the mobility routine
-    beforeWallAbs: true,              // before the wall-abs routine
-    everyNRounds: 2,                  // after every 2 rounds/sets of a main routine
-    mainRoutines: ["core", "strength"],
+    betweenRoutines: true,            // between two routines on the same day (so also after mobility)
+    // After every N rounds/sets of these routines, by level.
+    afterRounds: {
+      core:    { A: 1, B: 2, C: 2 },
+      wallAbs: { A: 1, B: 2, C: 2 },
+    },
     // false: water break is its own 45 s step, then the normal round rest.
     // true:  merge it into the round rest ("Rest + water", longest of the two).
     combineWithRoundRest: false,
-    walkReminderMinutes: 15,          // on walks: a reminder every 15 min (walk keeps going)
+    walkReminderMinutes: 15,          // on walks: a reminder every 15 min (walk keeps going)…
+    walkReminderIfLongerThan: 20,     // …only on walks longer than this many minutes
   },
 
   // ---- Form & safety tips (moves refer to these by key) --------------
   tips: {
-    knee:  "Go easy on the left knee — never force it, stop at any twinge, twist from the hips.",
-    elbow: "Right elbow: use fists or a wall if it complains.",
-    back:  "Use a thick mat or folded towel under your lower back/tailbone; skip if anything presses on a sore spot.",
+    knee:      "Go easy on the left knee — never force it, stop at any twinge, twist from the hips.",
+    elbow:     "Right elbow: use fists or a wall if it complains.",
+    back:      "Use a thick mat or folded towel under your lower back/tailbone; skip if anything presses on a sore spot.",
+    wallBack:  "Thick mat or folded towel under your lower back/tailbone; skip any move that presses on a sore spot.",
+    wallCrunch: "Short movement — slide hands up your thighs toward your knees and just lift your shoulder blades. Chest-to-thighs is NOT the goal.",
+    toeReach:  "Reach for your shins; toes come later.",
+    pushups:   "Right elbow: use fists, or go higher on the wall if it complains.",
+    chairKnee: "Easy on the left knee — knees over toes, stop at any twinge.",
   },
 
   // ---- Routines -----------------------------------------------------
   // style "timed":    every move is a countdown, auto-advancing.
   // style "circuit":  do every move once = 1 round/set; repeat.
   // style "segments": one continuous timed activity split into parts (walk/jog).
+  // levels: settings per level (A/B/C). fixed: the same at every level.
   routines: {
-    // Routine 1 — Daily mobility (5 min, same in every block)
+    // Daily mobility (5 min, every day, same at every level)
     mobility: {
       name: "Daily mobility",
       style: "timed",
@@ -121,134 +183,137 @@ var PLAN = {
       ],
     },
 
-    // Routine 2 — Core circuit (rep-based, rounds)
+    // Light core (Mondays, same at every level). Uses the core-circuit moves.
+    lightCore: {
+      name: "Light core",
+      style: "circuit",
+      roundLabel: "Round",
+      guideAs: "core",   // form guide + pinned videos are shared with the core circuit
+      note: "Do this a few hours before football, or after you've cooled down, eaten and had water — not right before kick-off. Split any move into 2 × 20 if needed.",
+      moves: CORE_MOVES,
+      fixed: { rounds: 1, restBetweenMoves: 30, restBetweenRounds: 0,
+        targets: { claps: 40, sameKnee: 40, kneePress: 40, squatTwist: 20 } },
+    },
+
+    // Core circuit (Tue / Fri)
     core: {
       name: "Core circuit",
       style: "circuit",
       roundLabel: "Round",
-      restBetweenMoves: 20,
-      restBetweenRounds: 75,
-      moves: [
-        { id: "claps",     name: "Claps under the legs", search: "clap under legs abs exercise",
-          how: ["Lie on your back (or sit leaning back) with your core braced.",
-                "Lift one straight leg and clap your hands underneath it.",
-                "Lower it and switch legs. Keep your lower back from arching."] },
-        { id: "sameKnee",  name: "Same-side knee raises", eachSide: true, search: "standing same side knee to elbow crunch",
-          how: ["Stand tall, hands lightly behind your head.",
-                "Lift one knee to the side and crunch the same-side elbow down to meet it.",
-                "Do all the reps on one side, then the other."] },
-        { id: "kneePress", name: "Knee lifts with downward press", search: "standing knee raise with downward press abs",
-          how: ["Stand tall, hands at chest height, palms facing down.",
-                "Drive one knee up while pressing both palms down towards it, tightening your abs.",
-                "Alternate legs at a steady pace."] },
-        { id: "squatTwist", name: "Squat with torso twist", tip: "knee", search: "squat with torso twist",
-          how: ["Feet shoulder-width apart. Sit your hips back and down, chest up.",
-                "As you stand, rotate your torso to one side. Alternate sides each rep.",
-                "Knees track over your toes. Only go as deep as the knee is happy."] },
-      ],
-      blocks: {
-        A: { rounds: 4, targets: { claps: 40, sameKnee: 40, kneePress: 40, squatTwist: 20 } },
-        B: { rounds: 4, targets: { claps: 45, sameKnee: 45, kneePress: 45, squatTwist: 20 } },
-        C: { rounds: 5, targets: { claps: 50, sameKnee: 50, kneePress: 50, squatTwist: 20 } },
+      moves: CORE_MOVES,
+      levels: {
+        A: { rounds: 2, restBetweenMoves: 30, restBetweenRounds: 90,
+             targets: { claps: 15, sameKnee: 10, kneePress: 15, squatTwist: 8 } },
+        B: { rounds: 3, restBetweenMoves: 25, restBetweenRounds: 75,
+             targets: { claps: 25, sameKnee: 15, kneePress: 25, squatTwist: 12 } },
+        C: { rounds: 4, restBetweenMoves: 20, restBetweenRounds: 60,
+             targets: { claps: 30, sameKnee: 20, kneePress: 30, squatTwist: 15 } },
       },
     },
 
-    // Routine 3 — Wall abs (feet flat on a wall, knees bent). All 5 moves = 1 set.
+    // Wall abs (feet flat on a wall, knees bent). All 5 moves = 1 set.
     wallAbs: {
       name: "Wall abs",
       style: "circuit",
       roundLabel: "Set",
-      restBetweenMoves: 15,
-      restBetweenRounds: 60,
       moves: [
-        { id: "toeReach",  name: "Wall toe-reach crunch", tip: "back", search: "wall toe touch crunch",
+        { id: "toeReach",  name: "Wall toe-reach crunch", tip: ["toeReach", "wallBack"], search: "wall toe touch crunch",
           how: ["Lie on your back, feet flat on the wall, knees bent about 90°.",
-                "Reach both hands up towards your toes, lifting your shoulder blades off the floor.",
+                "Reach both hands up towards your shins, lifting your shoulder blades off the floor.",
                 "Lower slowly. Keep your chin slightly tucked."] },
-        { id: "crunch",    name: "Wall crunch (hands behind head)", speak: "Wall crunch", tip: "back", search: "wall crunch abs",
-          how: ["Feet flat on the wall, knees bent. Hands lightly behind your head, elbows wide.",
-                "Curl your shoulders up using your abs. Don't pull on your neck.",
-                "Lower slowly with control."] },
-        { id: "crossBody", name: "Wall cross-body crunch (alternating)", speak: "Wall cross-body crunch", tip: "back", search: "wall bicycle crunch cross body",
+        { id: "crunch",    name: "Wall crunch", tip: ["wallCrunch", "wallBack"], search: "short crunch hands slide up thighs",
+          how: ["Feet flat on the wall, knees bent. Hands resting on your thighs.",
+                "Slide your hands up towards your knees, lifting just your shoulder blades off the floor.",
+                "Lower slowly. It's a short movement — chest-to-thighs is not the goal."] },
+        { id: "crossBody", name: "Wall cross-body crunch (alternating)", speak: "Wall cross-body crunch", tip: "wallBack", search: "wall bicycle crunch cross body",
           how: ["Feet flat on the wall, hands behind your head.",
                 "Curl up and rotate one elbow towards the opposite knee.",
                 "Lower and switch sides. Each side counts as one rep."] },
-        { id: "kneeHug",   name: "Wall knee-hug crunch", tip: "back", search: "knee hug crunch",
+        { id: "kneeHug",   name: "Wall knee-hug crunch", tip: "wallBack", search: "knee hug crunch",
           how: ["Start with feet flat on the wall, arms overhead or by your sides.",
                 "Bring your knees off the wall towards your chest as you curl up and hug them.",
                 "Return your feet to the wall with control."] },
-        { id: "reverse",   name: "Wall reverse crunch / hip lift", speak: "Wall reverse crunch", tip: "back", search: "reverse crunch hip lift",
+        { id: "reverse",   name: "Wall reverse crunch / hip lift", speak: "Wall reverse crunch", tip: "wallBack", search: "reverse crunch hip lift",
           how: ["Feet on the wall, arms by your sides, palms down.",
                 "Use your lower abs to curl your hips and tailbone a little off the floor.",
                 "Lower slowly. It's a small movement, so don't swing."] },
       ],
-      blocks: {
-        A: { rounds: 3, targets: { toeReach: 12, crunch: 12, crossBody: 12, kneeHug: 12, reverse: 12 } },
-        B: { rounds: 3, targets: { toeReach: 15, crunch: 15, crossBody: 15, kneeHug: 15, reverse: 15 } },
-        C: { rounds: 4, targets: {
-          toeReach:  { reps: 18, show: "15–20" },
-          crunch:    { reps: 18, show: "15–20" },
-          crossBody: { reps: 18, show: "15–20" },
-          kneeHug:   { reps: 18, show: "15–20" },
-          reverse:   { reps: 18, show: "15–20" },
+      levels: {
+        A: { rounds: 2, restBetweenMoves: 20, restBetweenRounds: 75,
+             targets: { toeReach: 8, crunch: 8, crossBody: 8, kneeHug: 8, reverse: 8 } },
+        B: { rounds: 3, restBetweenMoves: 15, restBetweenRounds: 60,
+             targets: { toeReach: 10, crunch: 10, crossBody: 10, kneeHug: 10, reverse: 10 } },
+        C: { rounds: 3, restBetweenMoves: 15, restBetweenRounds: 60, targets: {
+          toeReach:  { reps: 13, show: "12–15" },
+          crunch:    { reps: 13, show: "12–15" },
+          crossBody: { reps: 13, show: "12–15" },
+          kneeHug:   { reps: 13, show: "12–15" },
+          reverse:   { reps: 13, show: "12–15" },
         } },
       },
     },
 
-    // Routine 4 — Full-body strength (rounds)
+    // Strength (Wed), easier versions
     strength: {
-      name: "Full-body strength",
+      name: "Strength",
       style: "circuit",
       roundLabel: "Round",
-      restBetweenMoves: 20,
-      restBetweenRounds: 90,
       moves: [
-        { id: "pushups",  name: "Push-ups", note: "Incline or wall push-ups are fine", tip: "elbow", search: "push up proper form incline",
-          how: ["Hands slightly wider than your shoulders, body straight from head to heels.",
-                "Lower your chest towards the floor with elbows about 45° from your body.",
-                "Push back up. Hands on a bench or wall makes it easier."] },
+        { id: "pushups",  name: "Wall or counter push-ups", tip: "pushups", search: "wall push up incline counter push up form",
+          how: ["Hands on a wall or kitchen counter, a bit wider than your shoulders. Walk your feet back.",
+                "Keep your body straight and lower your chest towards your hands, elbows about 45° out.",
+                "Push back. The higher your hands, the easier it is."] },
         { id: "bridges",  name: "Glute bridges", tip: "back", search: "glute bridge proper form",
           how: ["Lie on your back, knees bent, feet flat and hip-width apart.",
                 "Drive through your heels to lift your hips. Squeeze your glutes for 1 second at the top.",
                 "Lower with control. Ribs down, no lower-back arch."] },
-        { id: "lunges",   name: "Reverse lunges", eachSide: true, sideWord: "each leg", tip: "knee", search: "reverse lunge proper form",
-          how: ["Stand tall and step one foot back.",
-                "Lower until both knees are bent (front knee over the ankle). Go shallower if the knee complains.",
-                "Push through the front heel to stand. Hold a chair or wall for balance if needed."] },
-        { id: "plank",    name: "Plank", search: "forearm plank proper form",
-          how: ["Forearms under your shoulders, legs straight behind you.",
-                "Squeeze your glutes and brace your abs so your body is one straight line.",
-                "Don't let your hips sag or pike up. Knees down is the easier version."] },
+        { id: "sitToStand", name: "Chair sit-to-stand", tip: "chairKnee", search: "chair sit to stand exercise form",
+          how: ["Sit near the front of a sturdy chair, feet flat and hip-width apart.",
+                "Lean forward slightly and stand up by pushing through your heels — use your hands only if needed.",
+                "Sit back down slowly and with control."] },
+        { id: "plank",    name: "Knee plank", search: "knee plank proper form",
+          how: ["Forearms under your shoulders, knees on the mat, body straight from head to knees.",
+                "Squeeze your glutes and brace your abs. Don't let your hips sag.",
+                "Ready for more? Lift your knees for a full plank."] },
         { id: "superman", name: "Superman hold", search: "superman hold exercise form",
           how: ["Lie face down with your arms stretched overhead.",
                 "Lift your arms, chest and legs a few centimetres off the floor. Look at the floor.",
                 "Squeeze your glutes and hold. Breathe steadily."] },
-        { id: "wallSit",  name: "Wall sit", tip: "knee", search: "wall sit proper form",
-          how: ["Back flat against the wall, feet about 50 cm in front of you.",
-                "Slide down until your knees are bent — 90°, or higher if the left knee complains.",
-                "Knees over ankles, weight in your heels. Hold."] },
+        { id: "chairSquat", name: "Slow chair squat", note: "3 s down, 1 s up", tip: "chairKnee", search: "slow box squat to chair tempo",
+          how: ["Stand in front of a chair, feet shoulder-width apart.",
+                "Take 3 seconds to sit back until you lightly touch the chair — don't flop down.",
+                "Stand back up in about 1 second. Knees over toes."] },
       ],
-      blocks: {
-        A: { rounds: 4, targets: {
-          pushups: { reps: 12, show: "12–15" }, bridges: { reps: 12, show: "12–15" }, lunges: { reps: 12, show: "12–15" },
-          plank: { seconds: 45 }, superman: { seconds: 20 }, wallSit: { seconds: 30 } } },
-        B: { rounds: 4, targets: {
-          pushups: 15, bridges: 15, lunges: 15,
-          plank: { seconds: 50 }, superman: { seconds: 25 }, wallSit: { seconds: 40 } } },
-        C: { rounds: 4, targets: {
-          pushups: { reps: 15, show: "15–20" }, bridges: { reps: 15, show: "15–20" }, lunges: { reps: 15, show: "15–20" },
-          plank: { seconds: 60 }, superman: { seconds: 30 }, wallSit: { seconds: 45 } } },
+      levels: {
+        A: { rounds: 2, restBetweenMoves: 30, restBetweenRounds: 90, targets: {
+          pushups: { reps: 9, show: "8–10" }, bridges: { reps: 9, show: "8–10" }, sitToStand: { reps: 9, show: "8–10" },
+          plank: { seconds: 20 }, superman: { seconds: 15 }, chairSquat: { reps: 9, show: "8–10" } } },
+        B: { rounds: 3, restBetweenMoves: 25, restBetweenRounds: 75, targets: {
+          pushups: { reps: 11, show: "10–12" }, bridges: { reps: 11, show: "10–12" }, sitToStand: { reps: 11, show: "10–12" },
+          plank: { seconds: 30 }, superman: { seconds: 20 }, chairSquat: { reps: 11, show: "10–12" } } },
+        C: { rounds: 3, restBetweenMoves: 20, restBetweenRounds: 60, targets: {
+          pushups: { reps: 13, show: "12–15" }, bridges: { reps: 13, show: "12–15" }, sitToStand: { reps: 13, show: "12–15" },
+          plank: { seconds: 40, name: "Plank (knee or full)" }, superman: { seconds: 25 }, chairSquat: { reps: 13, show: "12–15" } } },
       },
     },
 
-    // Walk / jog (Saturday). Segments run back to back; kind "jog" gets jog cues.
+    // Thursday walk. Segments run back to back.
+    walkShort: {
+      name: "Walk",
+      style: "segments",
+      levels: {
+        A: { segments: [{ kind: "walk", name: "Brisk walk", minutes: 20 }] },
+        B: { segments: [{ kind: "walk", name: "Walk", minutes: 25 }] },
+        C: { segments: [{ kind: "walk", name: "Walk", minutes: 25 }] },
+      },
+    },
+
+    // Saturday walk / jog. kind "jog" gets jog start / stop cues.
     walk: {
       name: "Walk / jog",
       style: "segments",
-      blocks: {
-        A: { segments: [
-          { kind: "walk", name: "Brisk walk", minutes: 40 },
-        ] },
+      levels: {
+        A: { segments: [{ kind: "walk", name: "Brisk walk", minutes: 30 }] },
         // 10 min warm-up walk, 5 × (1 min jog + 3 min walk), 10 min cool-down walk = 40 min
         B: { segments: [
           { kind: "walk", name: "Warm-up walk", minutes: 10 },
@@ -271,8 +336,9 @@ var PLAN = {
 
   // ---- Other sports / activities --------------------------------------
   // Log these on the Today page. Logging one reduces that day's workout
-  // according to its `effect` (see activityEffects below). Change the
-  // default minutes or effect, or add your own sports here.
+  // according to its `effect` (see activityEffects below) — except the
+  // weekday's own `activity` (football on Monday), which the plan already
+  // allows for. Change the default minutes or effect, or add sports here.
   activities: [
     { id: "football",  name: "Football",          icon: "⚽", minutes: 60, effect: "hard" },
     { id: "padel",     name: "Padel",             icon: "🎾", minutes: 60, effect: "moderate" },
@@ -288,13 +354,13 @@ var PLAN = {
 
   // What's left of the day's plan after an activity. Listed strongest first:
   // with several activities on one day, the strongest one decides.
-  // In `plan`, each routine is "full", { rounds: N } (capped at that block's
-  // rounds/sets), or left out to drop it for the day. Only routines that
+  // In `plan`, each routine is "full", { rounds: N } (capped at the rounds/
+  // sets of your level), or left out to drop it for the day. Only routines that
   // are already scheduled for that weekday are ever kept — an activity never
   // adds work. plan: null → the day's plan is unchanged.
   activityEffects: {
-    hard:     { label: "Hard",     plan: { mobility: "full", core: { rounds: 1 }, strength: { rounds: 1 } } },
-    moderate: { label: "Moderate", plan: { mobility: "full", core: { rounds: 2 }, strength: { rounds: 2 }, wallAbs: { rounds: 1 } } },
+    hard:     { label: "Hard",     plan: { mobility: "full", lightCore: "full", core: { rounds: 1 }, strength: { rounds: 1 } } },
+    moderate: { label: "Moderate", plan: { mobility: "full", lightCore: "full", core: { rounds: 2 }, strength: { rounds: 2 }, wallAbs: { rounds: 1 } } },
     light:    { label: "Light",    plan: null },
   },
 
